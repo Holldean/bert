@@ -123,7 +123,6 @@ flags.DEFINE_integer(
     "num_tpu_cores", 8,
     "Only used if `use_tpu` is True. Total number of TPU cores to use.")
 
-
 class InputExample(object):
   """A single training/test example for simple sequence classification."""
 
@@ -440,7 +439,7 @@ class QqpProcessor(DataProcessor):
     """Creates examples for the training and dev sets."""
     examples = []
     for (i, line) in enumerate(lines):
-      if i == 0:
+      if i == 0 or len(line) < 6:
         continue
       guid = "%s-%s" % (set_type, tokenization.convert_to_unicode(line[0]))
       text_a = tokenization.convert_to_unicode(line[3])
@@ -1278,9 +1277,9 @@ def main(_):
         writer.write("%s = %s\n" % (key, str(result[key])))
       eval_time = (time.time() - start) / 60
       writer.write("train_time: %fmin\n" % train_time)
-      writer.write("total_time: %fmin\n" % eval_time)
+      writer.write("eval_time: %fmin\n" % eval_time)
       tf.logging.info("train_time: %fmin\n" % train_time)
-      tf.logging.info("total_time: %fmin\n" % eval_time)
+      tf.logging.info("eval_time: %fmin\n" % eval_time)
 
   if FLAGS.do_predict:
     predict_examples = processor.get_test_examples(FLAGS.data_dir)

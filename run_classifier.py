@@ -573,6 +573,83 @@ class WnliProcessor(DataProcessor):
     return examples
 
 
+class MrpcProcessor(DataProcessor):
+  """Processor for the MRPC(GlUE) data set."""
+
+  def get_train_examples(self, data_dir):
+    """See base class."""
+    return self._create_examples(
+        self._read_tsv(os.path.join(data_dir, "msr_paraphrase_train.txt")), "train")
+
+  def get_dev_examples(self, data_dir):
+    """See base class."""
+    return self._create_examples(
+        self._read_tsv(os.path.join(data_dir, "msr_paraphrase_test.txt")), "dev")
+
+  def get_test_examples(self, data_dir):
+    """See base class."""
+    return []
+
+  def get_labels(self):
+    """See base class."""
+    return ["0", "1"]
+
+  def _create_examples(self, lines, set_type):
+    """Creates examples for the training and dev sets."""
+    examples = []
+    for (i, line) in enumerate(lines):
+      if i == 0:
+        continue
+      guid = "%s-%s-%s" % (set_type, 
+        tokenization.convert_to_unicode(line[1]), 
+        tokenization.convert_to_unicode(line[2]))
+      text_a = tokenization.convert_to_unicode(line[3])
+      text_b = tokenization.convert_to_unicode(line[4])
+      label = tokenization.convert_to_unicode(line[0])
+      examples.append(
+          InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
+    return examples
+
+
+# Author: Colanim (https://github.com/Colanim)
+# Taken from: https://github.com/Colanim/BERT_STS-B/blob/master/run_scorer.py 
+class StsProcessor(DataProcessor):
+  """Processor for the STS-B data set."""
+
+  def get_train_examples(self, data_dir):
+    """See base class."""
+    return self._create_examples(
+        self._read_tsv(os.path.join(data_dir, "train.tsv")), "train")
+
+  def get_dev_examples(self, data_dir):
+    """See base class."""
+    return self._create_examples(
+        self._read_tsv(os.path.join(data_dir, "dev.tsv")), "dev")
+
+  # ADDED
+  def get_test_examples(self, data_dir):
+    """See base class."""
+    return self._create_examples(
+        self._read_tsv(os.path.join(data_dir, "test.tsv")), "test")
+
+  def get_labels(self):
+    """See base class."""
+    return []
+
+  def _create_examples(self, lines, set_type):
+    """Creates examples for the training and dev sets."""
+    examples = []
+    for (i, line) in enumerate(lines):
+        if i == 0:
+            continue
+        guid = "%s-%s" % (set_type, tokenization.convert_to_unicode(line[0]))
+        text_a = tokenization.convert_to_unicode(line[-3])
+        text_b = tokenization.convert_to_unicode(line[-2])
+        label = float(line[-1])
+        examples.append(InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
+    return examples
+
+
 def convert_single_example(ex_index, example, label_list, max_seq_length,
                            tokenizer):
   """Converts a single `InputExample` into a single `InputFeatures`."""
@@ -585,9 +662,12 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
         label_id=0,
         is_real_example=False)
 
-  label_map = {}
-  for (i, label) in enumerate(label_list):
-    label_map[label] = i
+  sts = True if len(label_list) == 0 else False
+
+  if not sts:
+    label_map = {}
+    for (i, label) in enumerate(label_list):
+      label_map[label] = i
 
   tokens_a = tokenizer.tokenize(example.text_a)
   tokens_b = None
@@ -655,7 +735,7 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
   assert len(input_mask) == max_seq_length
   assert len(segment_ids) == max_seq_length
 
-  label_id = label_map[example.label]
+  label_id = label_map[example.label] if not sts else example.label
   if ex_index < 5:
     tf.logging.info("*** Example ***")
     tf.logging.info("guid: %s" % (example.guid))
@@ -664,7 +744,11 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
     tf.logging.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
     tf.logging.info("input_mask: %s" % " ".join([str(x) for x in input_mask]))
     tf.logging.info("segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
-    tf.logging.info("label: %s (id = %d)" % (example.label, label_id))
+
+    if not sts:
+      tf.logging.info("label: %s (id = %d)" % (example.label, label_id))
+    else:
+      tf.logging.info("label: %f" % example.label)
 
   feature = InputFeatures(
       input_ids=input_ids,
@@ -691,12 +775,21 @@ def file_based_convert_examples_to_features(
     def create_int_feature(values):
       f = tf.train.Feature(int64_list=tf.train.Int64List(value=list(values)))
       return f
+    
+    def create_float_feature(values):
+      f = tf.train.Feature(float_list=tf.train.FloatList(value=list(values)))
+      return f
 
     features = collections.OrderedDict()
     features["input_ids"] = create_int_feature(feature.input_ids)
     features["input_mask"] = create_int_feature(feature.input_mask)
     features["segment_ids"] = create_int_feature(feature.segment_ids)
-    features["label_ids"] = create_int_feature([feature.label_id])
+
+    if len(label_list) == 0:
+      features["label_ids"] = create_float_feature([feature.label_id])
+    else:
+      features["label_ids"] = create_int_feature([feature.label_id])
+
     features["is_real_example"] = create_int_feature(
         [int(feature.is_real_example)])
 
@@ -706,14 +799,14 @@ def file_based_convert_examples_to_features(
 
 
 def file_based_input_fn_builder(input_file, seq_length, is_training,
-                                drop_remainder):
+                                drop_remainder, sts):
   """Creates an `input_fn` closure to be passed to TPUEstimator."""
 
   name_to_features = {
       "input_ids": tf.FixedLenFeature([seq_length], tf.int64),
       "input_mask": tf.FixedLenFeature([seq_length], tf.int64),
       "segment_ids": tf.FixedLenFeature([seq_length], tf.int64),
-      "label_ids": tf.FixedLenFeature([], tf.int64),
+      "label_ids": tf.FixedLenFeature([], tf.int64) if not sts else tf.FixedLenFeature([], tf.float32),
       "is_real_example": tf.FixedLenFeature([], tf.int64),
   }
 
@@ -786,10 +879,13 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
   #
   # If you want to use the token-level output, use model.get_sequence_output()
   # instead.
+  sts = True if num_labels == 0 else False
+  num_labels = max(num_labels, 1)
+
   output_layer = model.get_pooled_output()
 
   hidden_size = output_layer.shape[-1].value
-
+  
   output_weights = tf.get_variable(
       "output_weights", [num_labels, hidden_size],
       initializer=tf.truncated_normal_initializer(stddev=0.02))
@@ -804,12 +900,17 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
 
     logits = tf.matmul(output_layer, output_weights, transpose_b=True)
     logits = tf.nn.bias_add(logits, output_bias)
-    probabilities = tf.nn.softmax(logits, axis=-1)
-    log_probs = tf.nn.log_softmax(logits, axis=-1)
 
-    one_hot_labels = tf.one_hot(labels, depth=num_labels, dtype=tf.float32)
+    if not sts:
+      probabilities = tf.nn.softmax(logits, axis=-1)
+      log_probs = tf.nn.log_softmax(logits, axis=-1)
+      one_hot_labels = tf.one_hot(labels, depth=num_labels, dtype=tf.float32)
+      per_example_loss = -tf.reduce_sum(one_hot_labels * log_probs, axis=-1)
+    else:
+      probabilities = None
+      logits = tf.squeeze(logits, [-1])
+      per_example_loss = tf.square(logits - labels)
 
-    per_example_loss = -tf.reduce_sum(one_hot_labels * log_probs, axis=-1)
     loss = tf.reduce_mean(per_example_loss)
 
     return (loss, per_example_loss, logits, probabilities)
@@ -842,6 +943,8 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
     (total_loss, per_example_loss, logits, probabilities) = create_model(
         bert_config, is_training, input_ids, input_mask, segment_ids, label_ids,
         num_labels, use_one_hot_embeddings)
+
+    sts = True if num_labels == 0 else False
 
     tvars = tf.trainable_variables()
     initialized_variable_names = {}
@@ -890,15 +993,50 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
             "eval_loss": loss,
         }
 
-      eval_metrics = (metric_fn,
+      def metric_fn_sts(per_example_loss, label_ids, logits, is_real_example):
+        # Display labels and predictions	
+        concat1 = tf.contrib.metrics.streaming_concat(logits)	
+        concat2 = tf.contrib.metrics.streaming_concat(label_ids)	
+        	
+        # Compute Pearson correlation	
+        pearson = tf.contrib.metrics.streaming_pearson_correlation(logits, label_ids)	
+        	
+        # Compute MSE	
+        # mse = tf.metrics.mean(per_example_loss)    	
+        mse = tf.metrics.mean_squared_error(label_ids, logits)	
+        	
+        # Compute Spearman correlation	
+        size = tf.size(logits)	
+        indice_of_ranks_pred = tf.nn.top_k(logits, k=size)[1]	
+        indice_of_ranks_label = tf.nn.top_k(label_ids, k=size)[1]	
+        rank_pred = tf.nn.top_k(-indice_of_ranks_pred, k=size)[1]	
+        rank_label = tf.nn.top_k(-indice_of_ranks_label, k=size)[1]	
+        rank_pred = tf.to_float(rank_pred)	
+        rank_label = tf.to_float(rank_label)	
+        spearman = tf.contrib.metrics.streaming_pearson_correlation(rank_pred, rank_label)	
+        	
+        return {'pred': concat1, 'label_ids': concat2, 'pearson': pearson, 'spearman': spearman, 'MSE': mse}
+
+      if sts:
+        eval_metrics = (metric_fn_sts,
                       [per_example_loss, label_ids, logits, is_real_example])
+      else:
+        eval_metrics = (metric_fn,
+                      [per_example_loss, label_ids, logits, is_real_example])
+
       output_spec = tf.contrib.tpu.TPUEstimatorSpec(
           mode=mode,
           loss=total_loss,
           eval_metrics=eval_metrics,
           scaffold_fn=scaffold_fn)
     else:
-      output_spec = tf.contrib.tpu.TPUEstimatorSpec(
+      if sts:
+        output_spec = tf.contrib.tpu.TPUEstimatorSpec(
+          mode=mode,
+          predictions={"logits": logits},
+          scaffold_fn=scaffold_fn)      
+      else:
+        output_spec = tf.contrib.tpu.TPUEstimatorSpec(
           mode=mode,
           predictions={"probabilities": probabilities},
           scaffold_fn=scaffold_fn)
@@ -980,6 +1118,8 @@ def convert_examples_to_features(examples, label_list, max_seq_length,
 
 
 def main(_):
+  import time
+  start = time.time()
   tf.logging.set_verbosity(tf.logging.INFO)
 
   processors = {
@@ -993,6 +1133,8 @@ def main(_):
       "rte": RteProcessor,
       "wnli": WnliProcessor,
       "sst-2": Sst2Processor,
+      "mrpc": MrpcProcessor,
+      "sts-b": StsProcessor,
   }
 
   tokenization.validate_case_matches_checkpoint(FLAGS.do_lower_case,
@@ -1020,6 +1162,7 @@ def main(_):
   processor = processors[task_name]()
 
   label_list = processor.get_labels()
+  sts = True if len(label_list) == 0 else False
 
   tokenizer = tokenization.FullTokenizer(
       vocab_file=FLAGS.vocab_file, do_lower_case=FLAGS.do_lower_case)
@@ -1081,8 +1224,11 @@ def main(_):
         input_file=train_file,
         seq_length=FLAGS.max_seq_length,
         is_training=True,
-        drop_remainder=True)
+        drop_remainder=True,
+        sts=sts)
     estimator.train(input_fn=train_input_fn, max_steps=num_train_steps)
+    train_time = (time.time() - start) / 60
+    start = time.time()
 
   if FLAGS.do_eval:
     eval_examples = processor.get_dev_examples(FLAGS.data_dir)
@@ -1119,7 +1265,8 @@ def main(_):
         input_file=eval_file,
         seq_length=FLAGS.max_seq_length,
         is_training=False,
-        drop_remainder=eval_drop_remainder)
+        drop_remainder=eval_drop_remainder,
+        sts=sts)
 
     result = estimator.evaluate(input_fn=eval_input_fn, steps=eval_steps)
 
@@ -1129,6 +1276,11 @@ def main(_):
       for key in sorted(result.keys()):
         tf.logging.info("  %s = %s", key, str(result[key]))
         writer.write("%s = %s\n" % (key, str(result[key])))
+      eval_time = (time.time() - start) / 60
+      writer.write("train_time: %fmin\n" % train_time)
+      writer.write("total_time: %fmin\n" % eval_time)
+      tf.logging.info("train_time: %fmin\n" % train_time)
+      tf.logging.info("total_time: %fmin\n" % eval_time)
 
   if FLAGS.do_predict:
     predict_examples = processor.get_test_examples(FLAGS.data_dir)
@@ -1157,7 +1309,8 @@ def main(_):
         input_file=predict_file,
         seq_length=FLAGS.max_seq_length,
         is_training=False,
-        drop_remainder=predict_drop_remainder)
+        drop_remainder=predict_drop_remainder,
+        sts=sts)
 
     result = estimator.predict(input_fn=predict_input_fn)
 
@@ -1165,15 +1318,24 @@ def main(_):
     with tf.gfile.GFile(output_predict_file, "w") as writer:
       num_written_lines = 0
       tf.logging.info("***** Predict results *****")
-      for (i, prediction) in enumerate(result):
-        probabilities = prediction["probabilities"]
-        if i >= num_actual_predict_examples:
-          break
-        output_line = "\t".join(
-            str(class_probability)
-            for class_probability in probabilities) + "\n"
-        writer.write(output_line)
-        num_written_lines += 1
+      if not sts:
+        for (i, prediction) in enumerate(result):
+          probabilities = prediction["probabilities"]
+          if i >= num_actual_predict_examples:
+            break
+          output_line = str(i) + "\t".join(
+              str(class_probability)
+              for class_probability in probabilities) + "\n"
+          writer.write(output_line)
+          num_written_lines += 1
+      else:
+        for (i, prediction) in enumerate(result):
+          logits = prediction["logits"]
+          if i >= num_actual_predict_examples:
+            break
+          output_line = "%d\t%s" % (i, str(logits))
+          writer.write(output_line)
+          num_written_lines += 1
     assert num_written_lines == num_actual_predict_examples
 
 
